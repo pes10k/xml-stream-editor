@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<simpsons decade="90s" locale="US">
+    <main>
+        <character sex="female">Marge Simpson</character>
+        <character sex="male">Homer Simpson</character>
+        <character sex="female">Lisa Simpson</character>
+        <character sex="male">Bart Simpson</character>
+        <character sex="female">Maggie Simpson</character>
+    </main>
+    <side>
+        <character sex="male">Disco Stu</character>
+        <character sex="male" title="Dr.">Julius Hibbert</character>
+    </side>
+</simpsons>

@@ -1,0 +1,40 @@
+{
+  "name": "xml-stream-editor",
+  "version": "0.0.1",
+  "description": "A streaming xml editor",
+  "main": "index.js",
+  "scripts": {
+    "build": "npx tsc",
+    "lint": "npx eslint src/**/*.ts src/*.ts",
+    "lint:fix": "npx eslint --fix src/**/*.ts src/*.ts",
+    "test": "npx mocha test/test.js"
+  },
+  "type": "module",
+  "repository": {
+    "url": "https://github.com/pes10k/xml-stream-editor.git"
+  },
+  "keywords": [
+    "xml",
+    "streams"
+  ],
+  "author": "Peter Snyder <pes@peteresnyder.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/pes10k/xml-stream-editor/issues"
+  },
+  "homepage": "https://github.com/pes10k/xml-stream-editor#readme",
+  "devDependencies": {
+    "@stylistic/eslint-plugin": "^5.7.0",
+    "@tsconfig/node24": "^24.0.4",
+    "@types/xml": "^1.0.11",
+    "eslint": "^9.39.2",
+    "mocha": "^11.3.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.53.1",
+    "xml2js": "^0.6.2"
+  },
+  "dependencies": {
+    "saxes": "^6.0.0",
+    "xml": "^1.0.1"
+  }
+}
