@@ -1,11 +1,9 @@
 {
     "extends": "@tsconfig/node24/tsconfig.json",
     "compilerOptions": {
-        "target": "es2024",
-        "outDir": "./built",
-        "esModuleInterop": true
+        "outDir": "dist"
     },
     "include": [
-        "./src/**/*"
+        "./src/**/*.ts"
     ]
 }

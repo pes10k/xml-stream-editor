@@ -1,103 +1,84 @@
 import { strict as assert } from 'node:assert'
 import { Transform, TransformCallback } from 'node:stream'
 
-import { SaxesAttributeNS, SaxesOptions, SaxesParser, TagForOptions, XMLDecl } from 'saxes'
-import xml from 'xml'
+import { SaxesOptions, SaxesParser, TagForOptions, XMLDecl } from 'saxes'
+
+import { toAttrValue, toBodyText, toCloseTag, toOpenTag } from './markup.js'
+
+type XMLAttributeValue = string
+type XMLAttributeName = string
+type XMLAttributes = Record<XMLAttributeName, XMLAttributeValue>
+
+type ElementSelector = string
+type ElementEditorFunc = (elm: Element) => Element
+type XMLStreamEditorConfig = Record<ElementSelector, ElementEditorFunc>
 
 interface XMLEditorNeedle {
   depth: number
-  path: XMLEditorPath
-  func: XMLEditorFunc
+  path: ElementSelector
+  func: ElementEditorFunc
 }
 
-type XMLEditorAttrs = Record<string, SaxesAttributeNS> | Record<string, string>
-type XMLEditorPath = string
-type XMLEditorFunc = (elm: XMLElement) => XMLElement
-type XMLEditorConfig = Record<XMLEditorPath, XMLEditorFunc>
-
-class XMLElement {
-  readonly name: string
-  readonly attrs?: XMLEditorAttrs
-
+class Element {
+  name: string
   text?: string
-  #children: XMLElement[] = []
+  attributes: XMLAttributes = {}
+  children: Element[] = []
 
-  constructor (name: string, attrs?: XMLEditorAttrs) {
+  static newForName (name: string, attrs?: XMLAttributes): Element {
+    return new Element(name, attrs)
+  }
+
+  static newForNode (node: TagForOptions<SaxesOptions>): Element {
+    // Here we check if each attribute name is simple (and so just a
+    // string), or in the namespace representation the "saxes" library
+    // uses (in which case attrValue will be a SaxesAttributeNS
+    // object, that we have to unpack a bit)
+    const attributes: XMLAttributes = {}
+    if (node.attributes) {
+      for (const [attrName, attrValue] of Object.entries(node.attributes)) {
+        if (typeof attrValue === 'string') {
+          attributes[attrName] = attrValue
+          continue
+        }
+        attributes[attrValue.name] = attrValue.value
+      }
+    }
+
+    return new Element(node.name, attributes)
+  }
+
+  constructor (name: string, attributes?: XMLAttributes) {
     this.name = name
-    this.attrs = attrs
+    if (attributes) {
+      this.attributes = attributes
+    }
   }
 
-  addChild (elm: XMLElement) {
-    this.#children.push(elm)
+  addChild (elm: Element): void {
+    this.children.push(elm)
   }
 
-  // This passes the simple key=value attrs along if the XML attributes
-  // are simple, or converts the annoying namespace'ed XML attributes
-  // to simpler ones if needed.
-  flatAttrs (): Record<string, string> {
-    if (this.attrs === undefined) {
-      return {}
+  removeChild (elm: Element): boolean {
+    const indexOfChild = this.children.indexOf(elm)
+    if (indexOfChild === -1) {
+      return false
     }
 
-    const flatAttrs: Record<string, string> = {}
-    for (const [attrKey, attrValue] of Object.entries(this.attrs)) {
-      if (typeof attrValue === 'string') {
-        flatAttrs[attrKey] = attrValue
-        continue
-      }
-      // Otherwise, the key is a SaxesAttributeNS instance
-      flatAttrs[attrValue.name] = attrValue.value
-    }
-    return flatAttrs
-  }
-
-  // Convert our representation of an XML element to a 'xml' / 'node-xml'
-  // representation, that can be passed to the libraries default `xml()`
-  // function.
-  toXMLObject (): xml.XmlObject {
-    const xmlObjParts: xml.XmlDesc[] = []
-    if (this.attrs) {
-      xmlObjParts.push({ _attr: this.flatAttrs() })
-    }
-    if (this.text) {
-      xmlObjParts.push(this.text)
-    }
-
-    const xmlDesc = xml.element(xmlObjParts)
-    for (const childObj of this.#children) {
-      xmlDesc.push(childObj.toXMLObject())
-    }
-    return { [this.name]: xmlDesc }
-  }
-
-  toString (xmlDecl?: XMLDecl): string {
-    if (xmlDecl) {
-      const xmlOption: xml.Option = {
-        declaration: {},
-      }
-      assert(typeof xmlOption.declaration === 'object')
-      if (xmlDecl.version) {
-        xmlOption.declaration.standalone = xmlDecl.standalone
-      }
-      if (xmlDecl.encoding) {
-        xmlOption.declaration.encoding = xmlDecl.encoding
-      }
-      return xml(this.toXMLObject(), xmlOption)
-    }
-
-    return xml(this.toXMLObject())
+    this.children.splice(indexOfChild, 1)
+    return true
   }
 }
 
-export class XMLEditorTransformer extends Transform {
+class XMLEditorTransformer extends Transform {
   // Used to mirror the XML tree as its being parsed. Only used to keep track
   // of when we're parsing (and so buffering) a subtree in the XML document
   // that will be edited when the entire subtree is parsed.
-  readonly #elmStack: XMLElement[] = []
+  readonly #elmStack: Element[] = []
 
   // This is a map of (VERY) simple xpaths (i.e., only XML element names;
   // no attributes, no name spaces, etc).
-  readonly #config: XMLEditorConfig
+  readonly #config: XMLStreamEditorConfig
 
   // Handle to the 'saxes' xml parser object.
   readonly #xmlParser: SaxesParser
@@ -107,26 +88,12 @@ export class XMLEditorTransformer extends Transform {
   // and the element that is the root of the subtree to be edited (we need
   // this second reference to it, outside the stack, so that we still have
   // a handle to the child elements after they've been pop'ed off the stack).
-  #subtreeToEditDepth?: number
-  #subtreeToEditFunc?: XMLEditorFunc
-  #subtreeToEdit?: XMLElement
-
-  // We store information about the xml declaration here, since the xml library
-  // requires us to pass along the xml declaration with the first element
-  // being written (seems we can't write the declaration by itself).
-  #xmlDecl?: XMLDecl
-  #hasAddedDecl = false
+  #subtreeToEditFunc?: ElementEditorFunc
+  #subtreeToEdit?: Element
 
   // Store any errors we've been passed by the saxes parser so that we
   // can pass it along in the transformer callback next time we get data.
   #error?: Error
-
-  #addXMLDeclOnce (): XMLDecl | undefined {
-    if (this.#xmlDecl && this.#hasAddedDecl === false) {
-      this.#hasAddedDecl = true
-      return this.#xmlDecl
-    }
-  }
 
   #isAtRootOfSubtreeToEdit (): XMLEditorNeedle | null {
     const currentElementPath = this.#elmStack.map(x => x.name).join(' ')
@@ -142,7 +109,29 @@ export class XMLEditorTransformer extends Transform {
   }
 
   #isInSubtreeToBeEdited (): boolean {
-    return this.#elmStack.length !== null
+    return this.#subtreeToEdit !== undefined
+  }
+
+  #writeElementToStream (element: Element): void {
+    this.push(toOpenTag(element.name))
+    for (const childElm of element.children) {
+      this.#writeElementToStream(childElm)
+    }
+    if (element.text) {
+      this.push(toBodyText(element.text))
+    }
+    this.push(toCloseTag(element.name))
+  }
+
+  #writeSubtreeToStream (): void {
+    assert(this.#subtreeToEdit)
+    assert(this.#subtreeToEditFunc)
+    const editedSubtreeElm = this.#subtreeToEditFunc(this.#subtreeToEdit)
+    this.#writeElementToStream(editedSubtreeElm)
+
+    // And now clear related state
+    this.#subtreeToEditFunc = undefined
+    this.#subtreeToEdit = undefined
   }
 
   #configureParserCallbacks () {
@@ -156,8 +145,8 @@ export class XMLEditorTransformer extends Transform {
       //    and append ourselves to the stack.
       // 3. We are NOT the root of a subtree to be edited, in which case
       //    we just add ourselves to the stack.
-      const newXMLElement = new XMLElement(node.name, node.attributes)
-      this.#elmStack.push(newXMLElement)
+      const newElement = Element.newForNode(node)
+      this.#elmStack.push(newElement)
       // Check for case one
       if (this.#isInSubtreeToBeEdited()) {
         return
@@ -166,29 +155,51 @@ export class XMLEditorTransformer extends Transform {
       const editorFuncInfo = this.#isAtRootOfSubtreeToEdit()
       if (editorFuncInfo !== null) {
         this.#subtreeToEditFunc = editorFuncInfo.func
-        this.#subtreeToEdit = newXMLElement
+        this.#subtreeToEdit = newElement
         return
       }
-      // Otherwise we're in case three (with nothing extra to do)
-      return
+      // Otherwise we're in case three, so print out the opening tag
+      // immediately.
+      this.push(toOpenTag(newElement.name, newElement.attributes))
     })
 
     this.#xmlParser.on('text', (text: string) => {
-      assert(this.#elmStack.length > 0)
-      const topOfStack = this.#elmStack.at(-1)
-      assert(topOfStack)
-      topOfStack.text = text
+      // There are two possible cases here
+      //
+      // 1. We're in a subtree to be edited, in which case we buffer
+      //    the text, or
+      // 2. We're not in the subtree being edited, in which case we can
+      //    print the text out immediately.
+
+      // Check for case one
+      if (this.#isInSubtreeToBeEdited()) {
+        const topOfStack = this.#elmStack.at(-1)
+        assert(topOfStack)
+        topOfStack.text = text
+        return
+      }
+
+      // Otherwise we're in case two, and can print the text out immediately.
+      this.push(toBodyText(text))
     })
 
     this.#xmlParser.on('xmldecl', (decl: XMLDecl) => {
-      this.#xmlDecl = decl
+      let xmlDecl = '<?xml version="1.0"'
+      if (decl.encoding) {
+        xmlDecl += ` encoding="${toAttrValue(decl.encoding)}"`
+      }
+      if (decl.standalone) {
+        xmlDecl += ` standalone="${toAttrValue(decl.standalone)}"`
+      }
+      xmlDecl += '?>'
+      this.push(xmlDecl + '\n')
     })
 
     this.#xmlParser.on('error', (error: Error) => {
       this.#error = error
     })
 
-    this.#xmlParser.on('closetag', () => {
+    this.#xmlParser.on('closetag', (node: TagForOptions<SaxesOptions>) => {
       // When we hit an XML element's close tag, three cases are possible.
       //
       // 1. We've completed a node that is NOT in a subtree with an assigned
@@ -207,20 +218,13 @@ export class XMLEditorTransformer extends Transform {
 
       // Check for case one
       if (this.#isInSubtreeToBeEdited() === false) {
-        this.push(completedElm.toString(this.#addXMLDeclOnce()))
+        this.push(toCloseTag(node.name))
         return
       }
 
       // Check for case two
       if (completedElm === this.#subtreeToEdit) {
-        assert(this.#subtreeToEditDepth === this.#elmStack.length)
-        assert(this.#subtreeToEditFunc)
-        const editedSubtreeElm = this.#subtreeToEditFunc(completedElm)
-        this.push(editedSubtreeElm.toString(this.#addXMLDeclOnce()))
-
-        this.#subtreeToEditFunc = undefined
-        this.#subtreeToEdit = undefined
-        this.#subtreeToEditDepth = undefined
+        this.#writeSubtreeToStream()
         return
       }
 
@@ -230,7 +234,7 @@ export class XMLEditorTransformer extends Transform {
     })
   }
 
-  constructor (config: XMLEditorConfig, saxesOptions?: SaxesOptions) {
+  constructor (config: XMLStreamEditorConfig, saxesOptions?: SaxesOptions) {
     super()
     this.#config = config
     this.#xmlParser = new SaxesParser(saxesOptions)
@@ -254,7 +258,7 @@ export class XMLEditorTransformer extends Transform {
   }
 }
 
-export const makeXMLEditor = (config: XMLEditorConfig,
+export const makeXMLEditor = (config: XMLStreamEditorConfig,
                               saxesOptions?: SaxesOptions) => {
   return new XMLEditorTransformer(config, saxesOptions)
 }
