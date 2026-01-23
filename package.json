@@ -2,7 +2,7 @@
   "name": "xml-stream-editor",
   "version": "0.0.1",
   "description": "A streaming xml editor",
-  "main": "index.js",
+  "main": "dist/xml-stream-editor.js",
   "scripts": {
     "build": "npx tsc",
     "clean": "rm dist/* || true",
