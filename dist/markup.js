@@ -1,4 +1,6 @@
 import xmlescape from 'xml-escape';
+import xnv from 'xml-name-validator';
+export const isValidName = xnv.name;
 export const toAttrValue = (value) => {
     return xmlescape(value);
 };
