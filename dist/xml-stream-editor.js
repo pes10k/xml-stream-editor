@@ -3,15 +3,29 @@ import { Transform } from 'node:stream';
 import { SaxesParser } from 'saxes';
 import { isValidName, toAttrValue, toBodyText, toCloseTag, toOpenTag } from './markup.js';
 export const newElement = (name) => {
-    if (isValidName(name) === false) {
-        throw new Error(`"${name}" is not a valid XML element name`);
-    }
     return {
         name: name,
         text: undefined,
-        attributes: {},
+        attributes: Object.create(null),
         children: [],
     };
+};
+const throwOnInvalidElement = (elm) => {
+    if (typeof elm.name !== 'string') {
+        throw new Error('No name provided for element');
+    }
+    if (!isValidName(elm.name)) {
+        throw new Error(`"${elm.name}" is not a valid XML element name`);
+    }
+    if (typeof elm.attributes !== 'object' || elm.attributes === null) {
+        throw new Error('"attributes" property on element is not an object');
+    }
+    for (const attrName of Object.keys(elm.attributes)) {
+        if (!isValidName(attrName)) {
+            throw new Error(`"${attrName}" is not a valid XML attribute name`);
+        }
+    }
+    elm.children.forEach(throwOnInvalidElement);
 };
 const cloneElement = (elm) => {
     const newElm = newElement(elm.name);
@@ -25,7 +39,7 @@ const elementForNode = (node) => {
     // string), or in the namespace representation the "saxes" library
     // uses (in which case attrValue will be a SaxesAttributeNS
     // object, that we have to unpack a bit)
-    const attributes = {};
+    const attributes = Object.create(null);
     if (node.attributes) {
         for (const [attrName, attrValue] of Object.entries(node.attributes)) {
             if (typeof attrValue === 'string') {
@@ -45,12 +59,21 @@ const elementForNameAndAttrs = (name, attrs) => {
     return newElm;
 };
 class XMLStreamEditorTransformer extends Transform {
+    // Default options, used if the caller doesn't provide any options (or
+    // merged into the provided options if the user only sets some options).
+    static defaultOptions = {
+        validate: true,
+        saxes: undefined,
+    };
+    // The configuration options, including possible options to pass to
+    // the (above) saxes parser at instantiation.
+    #options;
     // Used to track how deep in the XML tree the parser is, so that we can
     // check newly parsed elements against the passed editor rules.
-    #elmStack = [];
+    #parseStack = [];
     // This is a map of (VERY) simple xpaths (i.e., only XML element names;
     // no attributes, no name spaces, etc).
-    #config;
+    #editingRules;
     // Handle to the 'saxes' xml parser object.
     #xmlParser;
     // If set, tracks the current element in the parser stack that matches
@@ -60,17 +83,31 @@ class XMLStreamEditorTransformer extends Transform {
     // Store any errors we've been passed by the saxes parser so that we
     // can pass it along in the transformer callback next time we get data.
     #error;
+    #pushParsedElementToStack(element) {
+        const topOfStackElm = this.#parseStack.at(-1);
+        const pathToElement = topOfStackElm
+            ? topOfStackElm.path + ' ' + element.name
+            : element.name;
+        this.#parseStack.push({
+            element: element,
+            path: pathToElement,
+        });
+    }
     // Checks to see if the current editor stack (which tracks the current
     // element being parsed in the input XML stream, along with its parent
     // elements) matches any of the passed editor rules.
-    #doesStackMatchEditorRule() {
-        const currentElementPath = this.#elmStack.map(x => x.name).join(' ');
-        for (const [selector, editorFunc] of Object.entries(this.#config)) {
-            if (currentElementPath.endsWith(selector)) {
+    #doesStackMatchEditingRule() {
+        const topOfStack = this.#parseStack.at(-1);
+        // This method is only called after pushing an element to the stack,
+        // so this is guaranteed to be true
+        assert(topOfStack);
+        const topOfStackPath = topOfStack.path;
+        for (const [selector, editorFunc] of Object.entries(this.#editingRules)) {
+            if (topOfStackPath.endsWith(selector)) {
                 // The depth of the root of this subtree in the stack
-                const depth = this.#elmStack.length - 1;
+                const depth = this.#parseStack.length - 1;
                 assert(depth >= 0);
-                const elmToEdit = this.#elmStack[depth];
+                const elmToEdit = this.#parseStack[depth].element;
                 return { selector: selector, func: editorFunc, element: elmToEdit };
             }
         }
@@ -89,12 +126,15 @@ class XMLStreamEditorTransformer extends Transform {
         }
         this.push(toCloseTag(element.name));
     }
-    #writeSubtreeToStream() {
+    #callUserFuncOnCompletedElementAndWriteToStream() {
         assert(this.#elmToEditInfo);
         const clonedElm = cloneElement(this.#elmToEditInfo.element);
         try {
             const editedElm = this.#elmToEditInfo.func(clonedElm);
             if (editedElm) {
+                if (this.#options.validate === true) {
+                    throwOnInvalidElement(editedElm);
+                }
                 this.#writeElementToStream(editedElm);
             }
             this.#elmToEditInfo = undefined;
@@ -116,13 +156,13 @@ class XMLStreamEditorTransformer extends Transform {
             // 3. We are NOT the root of a subtree to be edited, in which case
             //    we just add ourselves to the stack.
             const newElement = elementForNode(node);
-            this.#elmStack.push(newElement);
+            this.#pushParsedElementToStack(newElement);
             // Check for case one
             if (this.#isInSubtreeToBeEdited()) {
                 return;
             }
             // Check for case two, if we're at the root of a subtree to edit.
-            const matchingElementInfo = this.#doesStackMatchEditorRule();
+            const matchingElementInfo = this.#doesStackMatchEditingRule();
             if (matchingElementInfo !== null) {
                 this.#elmToEditInfo = matchingElementInfo;
                 return;
@@ -140,9 +180,9 @@ class XMLStreamEditorTransformer extends Transform {
             //    print the text out immediately.
             // Check for case one
             if (this.#isInSubtreeToBeEdited()) {
-                const topOfStack = this.#elmStack.at(-1);
+                const topOfStack = this.#parseStack.at(-1);
                 assert(topOfStack);
-                topOfStack.text = text;
+                topOfStack.element.text = text;
                 return;
             }
             // Otherwise we're in case two, and can print the text out immediately.
@@ -176,36 +216,52 @@ class XMLStreamEditorTransformer extends Transform {
             // 3. We've completed a CHILD NODE in a subtree being edited,
             //    in which case we append this node to our buffered subtree
             //    and pop it off the stack.
-            const completedElm = this.#elmStack.pop();
+            const completedStackElement = this.#parseStack.pop();
+            const completedElm = completedStackElement?.element;
             assert(completedElm);
             // Check for case one
             if (this.#isInSubtreeToBeEdited() === false) {
+                // Write the closing tag of the just-completed element
+                // to the write stream.
                 this.push(toCloseTag(node.name));
                 return;
             }
             // Check for case two
             assert(this.#elmToEditInfo);
             if (completedElm === this.#elmToEditInfo.element) {
-                this.#writeSubtreeToStream();
+                this.#callUserFuncOnCompletedElementAndWriteToStream();
                 return;
             }
             // Otherwise, we must be in case three
-            assert(this.#elmStack.length > 0);
-            this.#elmStack.at(-1)?.children.push(completedElm);
+            const topOfStack = this.#parseStack.at(-1);
+            assert(topOfStack);
+            topOfStack.element.children.push(completedElm);
         });
     }
-    constructor(config, saxesOptions) {
+    constructor(editingRules, options) {
         super();
-        this.#config = config;
-        this.#xmlParser = new SaxesParser(saxesOptions);
+        const defaultOptions = XMLStreamEditorTransformer.defaultOptions;
+        const mergedOptions = {
+            validate: options?.validate ?? defaultOptions.validate,
+            saxes: options?.saxes ?? defaultOptions.saxes,
+        };
+        this.#options = mergedOptions;
+        this.#editingRules = editingRules;
+        this.#xmlParser = new SaxesParser(this.#options.saxes);
         this.#configureParserCallbacks();
     }
     _transform(chunk, encoding, callback) {
+        // Don't do any parsing if something threw an error parsing the previous
+        // chunk.
         if (this.#error) {
             callback(this.#error);
             return;
         }
         this.#xmlParser.write(chunk);
+        // And, similarly, don't continuing parsing if we've caught any errors
+        // parsing the current chunk. This looks a little redundant, but because
+        // the XML from the input stream is parsed asynchronously, this is
+        // just an attempt to catch and handle an error as quickly as possible.
         if (this.#error) {
             callback(this.#error);
             return;
@@ -213,6 +269,10 @@ class XMLStreamEditorTransformer extends Transform {
         callback();
     }
 }
-export const createXMLEditor = (config, saxesOptions) => {
-    return new XMLStreamEditorTransformer(config, saxesOptions);
+// This is the entry point to the library, and is designed / named
+// to mirror the naming of transformers in the standard lib
+// (e.g., createGzip , createDeflate, etc in the stdlib zlib module,
+// or createHmac, createECDH, etc in the stdlib crypto module).
+export const createXMLEditor = (rules, options) => {
+    return new XMLStreamEditorTransformer(rules, options);
 };

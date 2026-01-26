@@ -9,9 +9,31 @@ export declare interface Element {
   children: Element[]
 }
 
+export declare interface Options {
+  // Whether to check and enforce the validity of created and modified
+  // XML element names and attributes. If true, will throw an error
+  // if you create an XML element with a disallowed name (e.g.,
+  // <no spaces allowed>) or with an invalid attribute name
+  // (<my-elm a:b:c="too many namespaces" d@y="no @ in attr names">)
+  //
+  // This only checks the syntax of the XML element names and attributes.
+  // It does not perform any further validation, like if used namespaces
+  // are valid.
+  //
+  // default: `true`
+  validate: boolean // true
+
+  // Options defined by the "saxes" library, and passed to the "saxes" parser
+  //
+  // eslint-disable-next-line max-len
+  // https://github.com/lddubeau/saxes/blob/4968bd09b5fd0270a989c69913614b0e640dae1b/src/saxes.ts#L557
+  // https://www.npmjs.com/package/saxes
+  saxes?: SaxesOptions
+}
+
 export type Selector = string
 export type EditorFunc = (elm: Element) => Element | undefined
-export type Config = Record<Selector, EditorFunc>
+export type EditingRules = Record<Selector, EditorFunc>
 export declare const newElement: (name: string) => Element
 export declare const createXMLEditor: (
-  config: Config, saxesOptions?: SaxesOptions) => Transform
+  editingRules: EditingRules, options?: Options) => Transform

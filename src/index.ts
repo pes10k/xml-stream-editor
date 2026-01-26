@@ -1,5 +1,5 @@
 import {
-  Config,
+  Options,
   createXMLEditor,
   EditorFunc,
   Element,
@@ -8,7 +8,7 @@ import {
 } from './xml-stream-editor.js'
 
 export {
-  Config,
+  Options,
   createXMLEditor,
   EditorFunc,
   Element,

@@ -29,22 +29,38 @@ const createTestFileWriteStreamDetails = async () => {
 
 const stringToXMLObj = async (text) => {
   return new Promise((resolve) => {
-    parseString(text, (err, xmlObj) => {
-      const result = {
-        error: err,
+    try {
+      parseString(text, (err, xmlObj) => {
+        const result = {
+          error: err,
+          text: text,
+          obj: xmlObj,
+        }
+        resolve(result)
+      })
+    }
+    catch (e) {
+      resolve({
+        error: e,
         text: text,
-        obj: xmlObj,
-      }
-      resolve(result)
-    })
+        obj: null,
+      })
+    }
   })
 }
 
-const runTest = async (config, optionalFilePath) => {
-  const filePath = optionalFilePath || defaultTestFile
+// The `settings` parameter allows these attributes:
+//   - input: string
+//     XML file to read (as a stream) for the test. Defaults to
+//     test/assets/sample.xml
+//   - options: object
+//     Optional `Options` settings to pass to the `createXMLEditor` function.
+const runTest = async (rules, settings) => {
+  const filePath = settings?.input ?? defaultTestFile
+  const options = settings?.options
   const readStream = createReadStream(filePath)
   const writeBits = await createTestFileWriteStreamDetails()
-  const transformer = createXMLEditor(config)
+  const transformer = createXMLEditor(rules, options)
 
   await pipeline(readStream, transformer, writeBits.stream)
   const resultText = await writeBits.getText()
@@ -58,24 +74,24 @@ const defaultTestFileXMLObj = async () => {
 }
 
 describe('XML Stream Editor', () => {
-  describe('No editing rules', () => {
-    it('empty config', async () => {
-      const config = {}
-      const result = await runTest(config)
+  describe('Empty rule set', () => {
+    it('No rule defined', async () => {
+      const rules = {}
+      const result = await runTest(rules)
       const inputRs = await defaultTestFileXMLObj()
 
       assert.ifError(result.error)
       assert.equal(JSON.stringify(result.obj), JSON.stringify(inputRs.obj))
     })
 
-    it('Editing rules match nothing', async () => {
-      const config = {
+    it('Rules that do not match the document', async () => {
+      const rules = {
         'does not match anything': (element) => {
           element.text += ' text is edited'
           return element
         }
       }
-      const result = await runTest(config)
+      const result = await runTest(rules)
       const inputRs = await defaultTestFileXMLObj()
 
       assert.ifError(result.error)
@@ -85,7 +101,7 @@ describe('XML Stream Editor', () => {
 
   describe('Editing elements', () => {
     it('Edit text of single element ', async () => {
-      const config = {
+      const rules = {
         'character': (element) => {
           if (element.text === 'Marge Simpson') {
             element.text += ' (edited)'
@@ -93,7 +109,7 @@ describe('XML Stream Editor', () => {
           return element
         }
       }
-      const result = await runTest(config)
+      const result = await runTest(rules)
       assert.ifError(result.error)
       assert.match(result.text, /Marge Simpson \(edited\)/)
       const numEditedCount = result.text.match(/\(edited\)/g).length
@@ -101,7 +117,7 @@ describe('XML Stream Editor', () => {
     })
 
     it('Edit attribute of single element', async () => {
-      const config = {
+      const rules = {
         'character': (element) => {
           if (element.text === 'Marge Simpson') {
             element.attributes['target'] = 'set'
@@ -109,7 +125,7 @@ describe('XML Stream Editor', () => {
           return element
         }
       }
-      const result = await runTest(config)
+      const result = await runTest(rules)
       assert.ifError(result.error)
       assert.match(result.text, / target="set"/)
 
@@ -118,7 +134,7 @@ describe('XML Stream Editor', () => {
     })
 
     it('Remove element', async () => {
-      const config = {
+      const rules = {
         'main character': (element) => {
           if (element.text !== 'Marge Simpson') {
             return element
@@ -126,7 +142,7 @@ describe('XML Stream Editor', () => {
         }
       }
 
-      const result = await runTest(config)
+      const result = await runTest(rules)
       const inputRs = await defaultTestFileXMLObj()
 
       assert.ifError(result.error)
@@ -144,7 +160,7 @@ describe('XML Stream Editor', () => {
     })
 
     it('Add child element', async () => {
-      const config = {
+      const rules = {
         'main character': (element) => {
           if (element.text === 'Marge Simpson') {
             const newChild = newElement('AddedElement')
@@ -155,7 +171,7 @@ describe('XML Stream Editor', () => {
           return  element
         }
       }
-      const result = await runTest(config)
+      const result = await runTest(rules)
       assert.ifError(result.error)
 
       const margeElm = result.obj.simpsons.main[0].character[0]
@@ -165,9 +181,11 @@ describe('XML Stream Editor', () => {
       assert.equal(addedElm._, 'newly added child')
       assert.equal(addedElm.$['new-attr'], 'new value')
     })
+  })
 
-    it('Error on invalid element name', async () => {
-      const config = {
+  describe('Validation', () => {
+    it('Invalid element name', async () => {
+      const rules = {
         'main character': (element) => {
           if (element.text === 'Marge Simpson') {
             return newElement('name with space in it')
@@ -177,14 +195,71 @@ describe('XML Stream Editor', () => {
       }
 
       assert.rejects(async () => {
-        await runTest(config)
+        await runTest(rules)
       })
+    })
+
+    it('Invalid attribute name', async () => {
+      const rules = {
+        'main character': (element) => {
+          if (element.text === 'Marge Simpson') {
+            element.attributes['*a^'] = 'bad attribute name'
+          }
+          return  element
+        }
+      }
+
+      assert.rejects(async () => {
+        await runTest(rules)
+      })
+    })
+
+    it('Disabling validation allows invalid element names', async () => {
+      const rules = {
+        'main character': (element) => {
+          if (element.text === 'Marge Simpson') {
+            const newElm = newElement('bad name')
+            newElm.text = "inner text"
+            return newElm
+          }
+          return element
+        }
+      }
+      const settings = {
+        options: {
+          validate: false
+        }
+      }
+
+      const result = await runTest(rules, settings)
+      assert.ok(result.error)
+      assert.match(result.text, /<bad name>inner text<\/bad name>/)
+    })
+
+    it('Disabling validation allows invalid attribute names', async () => {
+      const rules = {
+        'main character': (element) => {
+          if (element.text === 'Marge Simpson') {
+            element.attributes['*a^'] = 'bad attribute name'
+          }
+          return  element
+        }
+      }
+      const settings = {
+        options: {
+          validate: false
+        }
+      }
+
+      const result = await runTest(rules, settings)
+      assert.ok(result.error)
+      assert.match(result.text, /\*a\^="bad attribute name">Marge/)
     })
   })
 
   describe('Multiple rules', () => {
     it('Non-overlapping rules are all applied', async () => {
-      const config = {
+      const rules = {
         'main character': (element) => {
           element.text += ' (main)'
           return element
@@ -195,7 +270,7 @@ describe('XML Stream Editor', () => {
         }
       }
 
-      const result = await runTest(config)
+      const result = await runTest(rules)
       assert.ifError(result.error)
 
       const numMainElementsEdited = result.text.match(/\(main\)/g).length
@@ -206,7 +281,7 @@ describe('XML Stream Editor', () => {
     })
 
     it('When rules overlap, only parent rule is applied', async () => {
-      const config = {
+      const rules = {
         'simpsons main character': (element) => {
           element.text = '(parent-rule)'
           return element
@@ -217,7 +292,7 @@ describe('XML Stream Editor', () => {
         },
       }
 
-      const result = await runTest(config)
+      const result = await runTest(rules)
       assert.ifError(result.error)
 
       const numParentMatches = result.text.match(/\(parent-rule\)/g).length

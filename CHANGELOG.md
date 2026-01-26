@@ -1,6 +1,18 @@
 CHANGELOG
 ===
 
+0.2.0
+---
+
+Significantly improve performance of selector matching.
+
+Add validation checks for created or modified XML element attribute names.
+
+Add config option, currently just with 1. the ability to disable validation
+of outgoing XML, and 2. configuring the "saxes" parser.
+
+Hopefully more helpful, additional text in README.md.
+
 0.1.1
 ---
 
