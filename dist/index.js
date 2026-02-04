@@ -1,2 +1,2 @@
-import { createXMLEditor, newElement, } from './xml-stream-editor.js';
-export { createXMLEditor, newElement, };
+export { Element, newElement } from './element.js';
+export { createXMLEditor, } from './xml-stream-editor.js';

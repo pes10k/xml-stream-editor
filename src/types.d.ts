@@ -2,11 +2,12 @@ import { Transform } from 'node:stream'
 
 import { SaxesOptions } from 'saxes'
 
-export declare interface Element {
-  name: string
-  text?: string
+export declare class Element {
+  constructor (name: string, attributes?: Record<string, string>)
   attributes: Record<string, string>
   children: Element[]
+  name: string
+  text?: string
 }
 
 export declare interface Options {
@@ -34,6 +35,8 @@ export declare interface Options {
 export type Selector = string
 export type EditorFunc = (elm: Element) => Element | undefined
 export type EditingRules = Record<Selector, EditorFunc>
+// Just wrapper for `new Element(name)`, mostly a remnant of a previous
+// implementation approach.
 export declare const newElement: (name: string) => Element
 export declare const createXMLEditor: (
   editingRules: EditingRules, options?: Options) => Transform

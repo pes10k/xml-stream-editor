@@ -1,6 +1,18 @@
 CHANGELOG
 ===
 
+0.2.1
+---
+
+Validate selector strings passed to `createXMLEditor` (for now, very basic.
+Just making sure there is only one space between element names in each
+selector).
+
+Fix issue where in some cases a selectors would match against the
+suffixes/endings of elements, and not always the full element name
+(e.g.,the selector `"steak"` would sometimes match elements like
+`<mistake>`).
+
 0.2.0
 ---
 

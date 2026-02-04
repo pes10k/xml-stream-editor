@@ -1,63 +1,9 @@
 import { strict as assert } from 'node:assert';
 import { Transform } from 'node:stream';
 import { SaxesParser } from 'saxes';
-import { isValidName, toAttrValue, toBodyText, toCloseTag, toOpenTag } from './markup.js';
-export const newElement = (name) => {
-    return {
-        name: name,
-        text: undefined,
-        attributes: Object.create(null),
-        children: [],
-    };
-};
-const throwOnInvalidElement = (elm) => {
-    if (typeof elm.name !== 'string') {
-        throw new Error('No name provided for element');
-    }
-    if (!isValidName(elm.name)) {
-        throw new Error(`"${elm.name}" is not a valid XML element name`);
-    }
-    if (typeof elm.attributes !== 'object' || elm.attributes === null) {
-        throw new Error('"attributes" property on element is not an object');
-    }
-    for (const attrName of Object.keys(elm.attributes)) {
-        if (!isValidName(attrName)) {
-            throw new Error(`"${attrName}" is not a valid XML attribute name`);
-        }
-    }
-    elm.children.forEach(throwOnInvalidElement);
-};
-const cloneElement = (elm) => {
-    const newElm = newElement(elm.name);
-    newElm.text = elm.text;
-    newElm.attributes = JSON.parse(JSON.stringify(elm.attributes));
-    newElm.children = elm.children.map(cloneElement);
-    return newElm;
-};
-const elementForNode = (node) => {
-    // Here we check if each attribute name is simple (and so just a
-    // string), or in the namespace representation the "saxes" library
-    // uses (in which case attrValue will be a SaxesAttributeNS
-    // object, that we have to unpack a bit)
-    const attributes = Object.create(null);
-    if (node.attributes) {
-        for (const [attrName, attrValue] of Object.entries(node.attributes)) {
-            if (typeof attrValue === 'string') {
-                attributes[attrName] = attrValue;
-                continue;
-            }
-            attributes[attrValue.name] = attrValue.value;
-        }
-    }
-    return elementForNameAndAttrs(node.name, attributes);
-};
-const elementForNameAndAttrs = (name, attrs) => {
-    const newElm = newElement(name);
-    if (attrs) {
-        newElm.attributes = attrs;
-    }
-    return newElm;
-};
+import { ParsedElement } from './element.js';
+import { toAttrValue, toBodyText, toCloseTag, toOpenTag } from './markup.js';
+import { ElementPath, SelectorRule } from './selector.js';
 class XMLStreamEditorTransformer extends Transform {
     // Default options, used if the caller doesn't provide any options (or
     // merged into the provided options if the user only sets some options).
@@ -71,9 +17,9 @@ class XMLStreamEditorTransformer extends Transform {
     // Used to track how deep in the XML tree the parser is, so that we can
     // check newly parsed elements against the passed editor rules.
     #parseStack = [];
-    // This is a map of (VERY) simple xpaths (i.e., only XML element names;
-    // no attributes, no name spaces, etc).
-    #editingRules;
+    // This is a map of objects that represent simple xpaths (i.e., only XML
+    // element names (no attributes, no name spaces, etc).
+    #rules;
     // Handle to the 'saxes' xml parser object.
     #xmlParser;
     // If set, tracks the current element in the parser stack that matches
@@ -85,9 +31,13 @@ class XMLStreamEditorTransformer extends Transform {
     #error;
     #pushParsedElementToStack(element) {
         const topOfStackElm = this.#parseStack.at(-1);
+        // We prefix every element name in the parse stack with '@' (a character
+        // that isn't valid in an XML element name) so that we can easily
+        // check if a selector matches the parse stack by just checking if
+        // the selector matches right end of the stack path.
         const pathToElement = topOfStackElm
-            ? topOfStackElm.path + ' ' + element.name
-            : element.name;
+            ? topOfStackElm.path.append(element.name)
+            : new ElementPath(element.name);
         this.#parseStack.push({
             element: element,
             path: pathToElement,
@@ -101,14 +51,13 @@ class XMLStreamEditorTransformer extends Transform {
         // This method is only called after pushing an element to the stack,
         // so this is guaranteed to be true
         assert(topOfStack);
-        const topOfStackPath = topOfStack.path;
-        for (const [selector, editorFunc] of Object.entries(this.#editingRules)) {
-            if (topOfStackPath.endsWith(selector)) {
+        for (const [selectorRule, editorFunc] of this.#rules.entries()) {
+            if (topOfStack.path.matches(selectorRule)) {
                 // The depth of the root of this subtree in the stack
                 const depth = this.#parseStack.length - 1;
                 assert(depth >= 0);
                 const elmToEdit = this.#parseStack[depth].element;
-                return { selector: selector, func: editorFunc, element: elmToEdit };
+                return { selector: selectorRule, func: editorFunc, element: elmToEdit };
             }
         }
         return null;
@@ -128,12 +77,16 @@ class XMLStreamEditorTransformer extends Transform {
     }
     #callUserFuncOnCompletedElementAndWriteToStream() {
         assert(this.#elmToEditInfo);
-        const clonedElm = cloneElement(this.#elmToEditInfo.element);
+        const clonedElm = this.#elmToEditInfo.element.clone();
+        const editElmFunc = this.#elmToEditInfo.func;
         try {
-            const editedElm = this.#elmToEditInfo.func(clonedElm);
+            const editedElm = editElmFunc(clonedElm);
             if (editedElm) {
                 if (this.#options.validate === true) {
-                    throwOnInvalidElement(editedElm);
+                    const [isValid, error] = editedElm.validate();
+                    if (!isValid) {
+                        throw error;
+                    }
                 }
                 this.#writeElementToStream(editedElm);
             }
@@ -155,7 +108,7 @@ class XMLStreamEditorTransformer extends Transform {
             //    and append ourselves to the stack.
             // 3. We are NOT the root of a subtree to be edited, in which case
             //    we just add ourselves to the stack.
-            const newElement = elementForNode(node);
+            const newElement = ParsedElement.fromSaxesNode(node);
             this.#pushParsedElementToStack(newElement);
             // Check for case one
             if (this.#isInSubtreeToBeEdited()) {
@@ -246,7 +199,13 @@ class XMLStreamEditorTransformer extends Transform {
             saxes: options?.saxes ?? defaultOptions.saxes,
         };
         this.#options = mergedOptions;
-        this.#editingRules = editingRules;
+        this.#rules = new Map();
+        for (const [selector, editFunc] of Object.entries(editingRules)) {
+            // This will throw if one of the user-provided selectors
+            // is invalid.
+            const parsedSelector = new SelectorRule(selector);
+            this.#rules.set(parsedSelector, editFunc);
+        }
         this.#xmlParser = new SaxesParser(this.#options.saxes);
         this.#configureParserCallbacks();
     }

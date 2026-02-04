@@ -60,12 +60,20 @@ const runTest = async (rules, settings) => {
   const options = settings?.options
   const readStream = createReadStream(filePath)
   const writeBits = await createTestFileWriteStreamDetails()
-  const transformer = createXMLEditor(rules, options)
-
-  await pipeline(readStream, transformer, writeBits.stream)
-  const resultText = await writeBits.getText()
-  await writeBits.remove()
-  return await stringToXMLObj(resultText)
+  try {
+    const transformer = createXMLEditor(rules, options)
+    await pipeline(readStream, transformer, writeBits.stream)
+    const resultText = await writeBits.getText()
+    await writeBits.remove()
+    return await stringToXMLObj(resultText)
+  }
+  catch (e) {
+    return {
+      error: e,
+      text: undefined,
+      obj: undefined,
+    }
+  }
 }
 
 const defaultTestFileXMLObj = async () => {
@@ -159,27 +167,51 @@ describe('XML Stream Editor', () => {
       assert.equal(numCharactersStart, numCharactersInEdit + 1)
     })
 
-    it('Add child element', async () => {
-      const rules = {
-        'main character': (element) => {
-          if (element.text === 'Marge Simpson') {
-            const newChild = newElement('AddedElement')
-            newChild.attributes['new-attr'] = 'new value'
-            newChild.text = 'newly added child'
-            element.children.push(newChild)
+    describe('Adding child elements', () => {
+      it('Using "legacy" `newElement` func' , async () => {
+        const rules = {
+          'main character': (element) => {
+            if (element.text === 'Marge Simpson') {
+              const newChild = newElement('AddedElement')
+              newChild.attributes['new-attr'] = 'new value'
+              newChild.text = 'newly added child'
+              element.children.push(newChild)
+            }
+            return  element
           }
-          return  element
         }
-      }
-      const result = await runTest(rules)
-      assert.ifError(result.error)
+        const result = await runTest(rules)
+        assert.ifError(result.error)
 
-      const margeElm = result.obj.simpsons.main[0].character[0]
-      assert.equal(margeElm.AddedElement.length, 1)
+        const margeElm = result.obj.simpsons.main[0].character[0]
+        assert.equal(margeElm.AddedElement.length, 1)
 
-      const addedElm = margeElm.AddedElement[0]
-      assert.equal(addedElm._, 'newly added child')
-      assert.equal(addedElm.$['new-attr'], 'new value')
+        const addedElm = margeElm.AddedElement[0]
+        assert.equal(addedElm._, 'newly added child')
+        assert.equal(addedElm.$['new-attr'], 'new value')
+      })
+
+      it('Using Element constructor', async () => {
+        const rules = {
+          main: (element) => {
+            const newChild = newElement('character')
+            newChild.text = 'Santa\'s Little Helper'
+            newChild.attributes['species'] = 'doggo'
+            element.children.push(newChild)
+            return element
+          }
+        }
+
+        const result = await runTest(rules)
+        assert.ifError(result.error)
+
+        const characterElms = result.obj.simpsons.main[0].character
+        assert.equal(characterElms.length, 6)
+
+        const lastCharacter = characterElms.at(-1)
+        assert.equal(lastCharacter._, 'Santa\'s Little Helper')
+        assert.equal(lastCharacter.$['species'], 'doggo')
+      })
     })
   })
 
@@ -257,8 +289,8 @@ describe('XML Stream Editor', () => {
     })
   })
 
-  describe('Multiple rules', () => {
-    it('Non-overlapping rules are all applied', async () => {
+  describe('Selectors', () => {
+    it('Different functions for non-overlapping selectors are applied', async () => {
       const rules = {
         'main character': (element) => {
           element.text += ' (main)'
@@ -280,7 +312,7 @@ describe('XML Stream Editor', () => {
       assert.equal(numSideElementsEdited, 2)
     })
 
-    it('When rules overlap, only parent rule is applied', async () => {
+    it('For overlapping selectors, selector matching most-parent element is called', async () => {
       const rules = {
         'simpsons main character': (element) => {
           element.text = '(parent-rule)'
@@ -299,6 +331,75 @@ describe('XML Stream Editor', () => {
       assert.equal(5, numParentMatches)
 
       assert.doesNotMatch(result.text, /\(middle-rule\)/)
+    })
+
+    it('Single-element selectors match all elements of that name', async () => {
+      let characterCount = 0
+      const rules = {
+        character: (elm) => {
+          characterCount += 1
+          elm.text += ` (character: ${characterCount})`
+          return elm
+        }
+      }
+
+      const result = await runTest(rules)
+      assert.ifError(result.error)
+
+      const numExpectedCharacters = 7
+      const numCharacterCloseTags = result.text.match(/<\/character>/g).length
+      assert.equal(numExpectedCharacters, numCharacterCloseTags)
+
+      let characterIndex = 0
+      while (characterIndex < numExpectedCharacters) {
+        characterIndex += 1
+        const expectedText = `(character: ${characterIndex})<`
+        assert.ok(result.text.includes(expectedText))
+      }
+    })
+
+    // This test checks that a selector like "suffix" does not match an
+    // element <prefix-suffix> (which in 0.2.0 and earlier could happen
+    // in some parse stack states).
+    it('Do not match if selector matches an element name suffix', async () => {
+      const rules = {
+        // We are testing to make sure this does NOT match
+        // "<main> <character>".
+        'in character': (elm) => {
+          elm.text += ' (matched selector in character)'
+          return elm
+        },
+        'side character': (elm) => {
+          elm.text += ' (matched selector side character)'
+          return elm
+        }
+      }
+
+      const result = await runTest(rules)
+      assert.ifError(result.error)
+      const xmlText = result.text
+
+      const inCharacterPattern = /\(matched selector in character\)/g
+      const numInCharMatches = xmlText.match(inCharacterPattern)?.length || 0
+      assert.equal(numInCharMatches, 0)
+
+      const sideCharacterPattern = /\(matched selector side character\)/g
+      const numSideCharMatches = xmlText.match(sideCharacterPattern)?.length
+      assert.equal(numSideCharMatches, 2)
+    })
+
+    it('Throw on invalid element names in a selector', async () => {
+      const badSelector = 'bad!name'
+      const rules = {
+        [badSelector]: (elm) => {
+          elm.text = 'should never happen'
+          return elm
+        }
+      }
+
+      const result = await runTest(rules)
+      assert.ok(result.error)
+      assert.ok(result.error.message.includes(badSelector))
     })
   })
 })

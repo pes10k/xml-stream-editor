@@ -1,6 +1,6 @@
 {
   "name": "xml-stream-editor",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A streaming xml editor.",
   "main": "dist/index.js",
   "files": [

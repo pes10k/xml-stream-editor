@@ -78,7 +78,6 @@ interface Options {
 
   // Options defined by the "saxes" library, and passed to the "saxes" parser
   //
-  // eslint-disable-next-line max-len
   // https://github.com/lddubeau/saxes/blob/4968bd09b5fd0270a989c69913614b0e640dae1b/src/saxes.ts#L557
   // https://www.npmjs.com/package/saxes
   saxes?: SaxesOptions
@@ -116,46 +115,43 @@ import { createReadStream } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
 import { createXMLEditor, newElement } from 'xml-stream-editor'
 
-(async () => {
-    // The keys of this object are selector strings, and the
-    // values are functions that get called with matching elements.
-    const rules = {
-        "main character": (elm) => {
-            switch (elm.text) {
-                case "Marge Simpson":
-                    elm.attributes["hair"] = "blue"
-                    break
-                case "Homer Simpson":
-                    elm.text += " (Sr.)"
-                    break
-                case "Lisa Simpson":
-                    elm.text = ""
+// The keys of this object are selector strings, and the
+// values are functions that get called with matching elements.
+const rules = {
+    "main character": (elm) => {
+        switch (elm.text) {
+            case "Marge Simpson":
+                elm.attributes["hair"] = "blue"
+                break
+            case "Homer Simpson":
+                elm.text += " (Sr.)"
+                break
+            case "Lisa Simpson":
+                elm.text = ""
 
-                    // Create an <instrument> element and make it
-                    // a child element.
-                    const instrumentElm = newElement("instrument")
-                    instrumentElm.text = "saxophone"
-                    elm.children.push(instrumentElm)
+                // Create an <instrument> element and make it a child element.
+                const instrumentElm = newElement("instrument")
+                instrumentElm.text = "saxophone"
+                elm.children.push(instrumentElm)
 
-                    // Also create a new <name> element, and also make it
-                    // a child element.
-                    const nameElm = newElement("name")
-                    nameElm.text = "Lisa Simpson"
-                    elm.children.push(nameElm)
-                    break
-                case "Bart Simpson":
-                    // Remove the node by not returning an element.
-                    return
-            }
-            return elm
+                // Also create a new <name> element, and also make it a child
+                // element.
+                const nameElm = newElement("name")
+                nameElm.text = "Lisa Simpson"
+                elm.children.push(nameElm)
+                break
+            case "Bart Simpson":
+                // Remove the node by not returning an element.
+                return
         }
+        return elm
     }
-    await pipeline(
-        createReadStream("simpsons.xml"), // above example
-        createXMLEditor(rules),
-        process.stdout
-    )
-})()
+}
+await pipeline(
+    createReadStream("simpsons.xml"), // above example
+    createXMLEditor(rules),
+    process.stdout
+)
 ```
 
 And you'll find this printed to `STDOUT` (reformatted and annotated):
@@ -203,29 +199,31 @@ import { createReadStream } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
 import { createXMLEditor, newElement } from 'xml-stream-editor'
 
-(async () => {
-    const rules = {
-        // This rule will match first, since the "main" element will be
-        // identified first during parsing.
-        "main character": (elm) => {
-            // editing goes here
-            return elm
-        },
-        // And as a result, this rule will never be applied during editing
-        // (since anytime "character" would match a <character> element,
-        // that <character> element will have already been matched by the
-        // above "main character" selector.
-        "character": (elm) => {
-            // this function would never be called in this document.
-            return elm
-        },
-    }
-    await pipeline(
-        createReadStream("simpsons.xml"), // above example
-        createXMLEditor(rules),
-        process.stdout
-    )
-})()
+const rules = {
+    // This rule will match first, since the "main" element will be
+    // identified first during parsing.
+    "main character": (elm) => {
+        // editing goes here
+        return elm
+    },
+    // And as a result, this rule will never match the "Disco Stu"
+    // or "Julius Hibbert" elements, since anytime the "character" selector
+    // would match a <character> element, that <character> element will
+    // have already been matched by the above "main character" selector.
+    //
+    // However, this selector would match (and so this function would
+    // be called with) the two <character> elements that are children
+    // of the <side> element.
+    "character": (elm) => {
+        // this function would never be called in this document.
+        return elm
+    },
+}
+await pipeline(
+    createReadStream("simpsons.xml"), // above example
+    createXMLEditor(rules),
+    process.stdout
+)
 ```
 
 ## Motivation
