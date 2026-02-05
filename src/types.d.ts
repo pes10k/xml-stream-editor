@@ -32,11 +32,16 @@ export declare interface Options {
   saxes?: SaxesOptions
 }
 
+// Rules used to specify which XML elements to edit
 export type Selector = string
+// Functions that receive and can edit the XML elements that match a
+// corresponding `Selector` string.
 export type EditorFunc = (elm: Element) => Element | undefined
+// User provided mapping specifying "I want to edit the XML elements that match
+// <key> selector rule with <value> function."
 export type EditingRules = Record<Selector, EditorFunc>
-// Just wrapper for `new Element(name)`, mostly a remnant of a previous
-// implementation approach.
+// Convenience function to call when you want to create a new child node
+// in the document.
 export declare const newElement: (name: string) => Element
 export declare const createXMLEditor: (
   editingRules: EditingRules, options?: Options) => Transform

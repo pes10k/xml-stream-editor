@@ -5,7 +5,7 @@ import { SaxesOptions, SaxesParser, TagForOptions, XMLDecl } from 'saxes'
 
 import { Element, ParsedElement } from './element.js'
 import { toAttrValue, toBodyText, toCloseTag, toOpenTag } from './markup.js'
-import { ElementPath, SelectorRule } from './selector.js'
+import { ElementPath } from './element-path.js'
 
 export type Selector = string
 export type EditorFunc = (elm: Element) => Element | undefined
@@ -33,7 +33,7 @@ export interface Options {
 interface ElementToEditInfo {
   element: ParsedElement
   func: EditorFunc
-  selector: SelectorRule
+  path: ElementPath
 }
 
 interface ParserStackEntry {
@@ -59,7 +59,7 @@ class XMLStreamEditorTransformer extends Transform {
 
   // This is a map of objects that represent simple xpaths (i.e., only XML
   // element names (no attributes, no name spaces, etc).
-  readonly #rules: Map<SelectorRule, EditorFunc>
+  readonly #rules: Map<ElementPath, EditorFunc>
 
   // Handle to the 'saxes' xml parser object.
   readonly #xmlParser: SaxesParser
@@ -80,7 +80,7 @@ class XMLStreamEditorTransformer extends Transform {
     // check if a selector matches the parse stack by just checking if
     // the selector matches right end of the stack path.
     const pathToElement = topOfStackElm
-      ? topOfStackElm.path.append(element.name)
+      ? topOfStackElm.path.appendName(element.name)
       : new ElementPath(element.name)
     this.#parseStack.push({
       element: element,
@@ -97,13 +97,13 @@ class XMLStreamEditorTransformer extends Transform {
     // so this is guaranteed to be true
     assert(topOfStack)
 
-    for (const [selectorRule, editorFunc] of this.#rules.entries()) {
-      if (topOfStack.path.matches(selectorRule)) {
+    for (const [elementPath, editorFunc] of this.#rules.entries()) {
+      if (topOfStack.path.matches(elementPath)) {
         // The depth of the root of this subtree in the stack
         const depth = this.#parseStack.length - 1
         assert(depth >= 0)
         const elmToEdit = this.#parseStack[depth].element
-        return { selector: selectorRule, func: editorFunc, element: elmToEdit }
+        return { path: elementPath, func: editorFunc, element: elmToEdit }
       }
     }
     return null
@@ -261,11 +261,11 @@ class XMLStreamEditorTransformer extends Transform {
     }
 
     this.#options = mergedOptions
-    this.#rules = new Map<SelectorRule, EditorFunc>()
+    this.#rules = new Map<ElementPath, EditorFunc>()
     for (const [selector, editFunc] of Object.entries(editingRules)) {
       // This will throw if one of the user-provided selectors
       // is invalid.
-      const parsedSelector = new SelectorRule(selector)
+      const parsedSelector = new ElementPath(selector)
       this.#rules.set(parsedSelector, editFunc)
     }
     this.#xmlParser = new SaxesParser(this.#options.saxes)

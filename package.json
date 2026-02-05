@@ -1,7 +1,7 @@
 {
   "name": "xml-stream-editor",
-  "version": "0.2.1",
-  "description": "A streaming xml editor.",
+  "version": "0.2.2",
+  "description": "A convenient, high level, streaming xml editor.",
   "main": "dist/index.js",
   "files": [
     "dist/*",
@@ -18,7 +18,7 @@
   "type": "module",
   "types": "src/types.d.ts",
   "repository": {
-    "url": "https://github.com/pes10k/xml-stream-editor.git"
+    "url": "git+https://github.com/pes10k/xml-stream-editor.git"
   },
   "keywords": [
     "xml",

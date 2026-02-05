@@ -1,6 +1,14 @@
 CHANGELOG
 ===
 
+0.2.2
+---
+
+Some minor internal reworking and collapsing of types (realized that
+"the strings users use to define which XML elements they want to edit," and
+"strings used to track where each open element exist in the XML document tree"
+are effectively the same thing).
+
 0.2.1
 ---
 

@@ -3,18 +3,19 @@ import { SaxesOptions, TagForOptions } from 'saxes'
 import xnv from 'xml-name-validator'
 
 type SaxesNode = TagForOptions<SaxesOptions>
-type Attributes = Record<string, string>
-type ElementName = string
 
 const isValidName = xnv.qname
 
+export type ElementAttributes = Record<string, string>
+export type ElementName = string
+
 export class Element {
-  attributes: Attributes
+  attributes: ElementAttributes
   children: Element[] = []
   name: ElementName
   text?: string
 
-  constructor (name: ElementName, attributes?: Attributes) {
+  constructor (name: ElementName, attributes?: ElementAttributes) {
     this.name = name
     this.attributes = attributes
       ? JSON.parse(JSON.stringify(attributes))
@@ -58,7 +59,7 @@ export class ParsedElement extends Element {
     // string), or in the namespace representation the "saxes" library
     // uses (in which case attrValue will be a SaxesAttributeNS
     // object, that we have to unpack a bit)
-    const attributes: Attributes = Object.create(null)
+    const attributes: ElementAttributes = Object.create(null)
     if (node.attributes) {
       for (const [attrName, attrValue] of Object.entries(node.attributes)) {
         if (typeof attrValue === 'string') {
@@ -82,6 +83,7 @@ export class ParsedElement extends Element {
   }
 }
 
-export const newElement = (name: string, attributes?: Attributes): Element => {
+export const newElement = (name: ElementName,
+                           attributes?: ElementAttributes): Element => {
   return new Element(name, attributes)
 }
